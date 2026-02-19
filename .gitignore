@@ -1,0 +1,13 @@
+# To refresh git after changing this file:
+#   $ git rm -rf --cached .
+#   $ git add .
+/sys/*/lib/libsource_analyzer.so
+/sys/*/lib/lld
+/sys/*/lib/lld.exe
+/sys/*/lib/clang
+/sys/*/lib/clang.exe
+/sys/python/*
+__pycache__
+a.out
+a.exe
+.#*
