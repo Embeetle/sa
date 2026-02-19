@@ -1,0 +1,12 @@
+CFLAGS = -Wall -Werror
+CXXFLAGS = -Wall -Werror
+CC = $(TOOLPREFIX)gcc
+CXX = $(TOOLPREFIX)g++
+%.o: %.c; $(CC) -c $< -o $@ $(CFLAGS) $(patsubst %,-I%,$(HDIRS))
+%.o: %.cpp; $(CXX) -c $< -o $@ $(CXXFLAGS) $(patsubst %,-I%,$(HDIRS))
+
+VPATH = $(SOURCE)
+LD = $(CXX)
+#LD = $(CC)
+exe: $(OBJECTS)
+	$(LD) -o $@ $^

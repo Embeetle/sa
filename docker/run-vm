@@ -1,0 +1,14 @@
+#!/bin/sh
+# The command given as argument to `docker run ...` is executed without any
+# initialization; for example, /etc/bashrc and ~/.bashrc are not executed.
+# Docker will simply exec the arguments.  Also, ~ and $ are not expanded.
+#
+# If the given command is or defaults to `bash`, then bash will execute these
+# initialization scripts, and expand ~ and $ in any commands given to it.
+#
+docker run \
+  --volume=$HOME/sa-builder-data:/data \
+  --net=host \
+  --env TERM=$TERM \
+  -it sa-builder \
+  "$@"

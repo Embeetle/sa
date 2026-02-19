@@ -1,0 +1,26 @@
+# ------------------------------------------- #
+#                                             #
+#              GDB commands                   #
+#              FOR STM32F303VCTx
+#                                             #
+# ------------------------------------------- #
+# 256KByte FLASH
+# 
+# This is a list of all the GDB commands that
+# Embeetle will execute when you click the
+# flash button.
+# You can add and remove GDB commands as you
+# wish.
+
+arm-none-eabi-gdb.exe
+
+(gdb) target remote localhost:3333
+(gdb) monitor reset halt
+(gdb) monitor flash erase_address 0x8000000 0x00040000
+(gdb) monitor reset halt
+
+(gdb) file ..\\..\\build\\myApp.elf
+(gdb) load
+(gdb) monitor reset run
+(gdb) monitor shutdown
+(gdb) quit

@@ -1,0 +1,60 @@
+
+'''============================================''' 
+'''    Embeetle generated project config    '''
+'''============================================''' 
+
+# 1. Chip 
+# --------
+name = 'STM32F303VC'
+
+# FLASH sections 
+# ---------------
+# > Memory 'FLASH'
+name    = 'FLASH'
+memtype = 'FLASH'
+rights  = 'rx'
+origin  = 134217728 # nr of bytes
+length  = 262144 # nr of bytes
+used    = 409600 # nr of bytes
+
+# RAM sections 
+# -------------
+# > Memory 'RAM'
+name    = 'RAM'
+memtype = 'RAM'
+rights  = 'xrw'
+origin  = 536870912 # nr of bytes
+length  = 40960 # nr of bytes
+used    = 409600 # nr of bytes
+
+# > Memory 'CCMRAM'
+name    = 'CCMRAM'
+memtype = 'RAM'
+rights  = 'rw'
+origin  = 268435456 # nr of bytes
+length  = 8192 # nr of bytes
+used    = 409600 # nr of bytes
+
+# 2. Project Paths 
+# -------------------
+builddir_relpath          = 'build'
+configdir_relpath         = 'config'
+sourcedir_relpath         = 'source'
+osdir_relpath             = 'None'
+bin_relpath               = 'build/myApp.bin'
+elf_relpath               = 'build/myApp.elf'
+linkerscript_relpath      = 'config/buildConfig/linkerscript.ld'
+makefile_relpath          = 'config/buildConfig/makefile'
+gdbcmds_relpath           = 'config/flashConfig/gdbCommands.txt'
+openocdcmds_relpath       = 'config/flashConfig/openocdCommands.txt'
+openocdcfg_relpaths_list  = ['config/flashConfig/probe_stlink.cfg', 'config/flashConfig/board_stm32f3.cfg']
+
+# 3. Probe 
+# -----------
+probe_name         = 'STLINK_V2_1'
+interface_driver   = 'HLA' # Driver for USB communication between OpenOCD and Probe.
+transport_protocol = 'HLA_SWD' # Protocol for communication between Probe and Microcontroller.
+
+# 4. RTOS 
+# --------
+name = 'BAREMETAL'

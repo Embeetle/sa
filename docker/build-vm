@@ -1,0 +1,2 @@
+#!/bin/sh -e
+docker image build -t sa-builder $(dirname $0)

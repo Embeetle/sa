@@ -1,0 +1,5 @@
+
+CFLAGS = -Wall -Werror
+CPPFLAGS = $(patsubst %,-I%,$(HDIRS)) -U__clang__
+
+%.o: %.c; $(TOOLPREFIX)gcc -c $< -o $@ $(CFLAGS) $(CPPFLAGS)

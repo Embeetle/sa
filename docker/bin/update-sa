@@ -1,0 +1,40 @@
+#!/bin/bash
+set -e
+
+# Clone or update git for LLVM
+git config --global --add safe.directory /data/llvm
+if [ ! -d /data/llvm ]; then
+    echo "Clone LLVM ..."
+    git clone --depth=1 -b embeetle git@git.embeetle.com:llvm /data/llvm
+else
+    echo "Fetch LLVM ..."
+    ( cd /data/llvm; \
+      git reset --hard embeetle; \
+      git pull origin embeetle; \
+      git clean -d -x -f; \
+    )
+fi
+
+# Clone or update git for SA
+git config --global --add safe.directory /data/embeetle
+if [ ! -d /data/sa ]; then
+    echo "Clone SA ..."
+    git clone --depth=1 -b master git@git.embeetle.com:sa /data/sa
+else
+    echo "Fetch SA ..."
+    ( cd /data/sa; \
+      git reset --hard master; \
+      git pull origin master; \
+      git clean -d -x -f \
+    )
+fi
+
+echo "Create build directories ..."
+mkdir -p /data/bld/llvm
+mkdir -p /data/bld/sa
+mkdir -p /data/bld/beetle_tools
+echo "Done"
+
+
+
+

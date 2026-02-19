@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+update-sa
+
+echo "Make LLVM"
+make-sa llvm
+
+echo "Make and upload SA"
+make-sa -j4 upload

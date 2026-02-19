@@ -1,0 +1,24 @@
+[user]
+	name = Johan Cockx
+	email = johan@embeetle.com
+[core]
+	pager = 
+[push]
+	default = simple
+[merge]
+	tool = meld
+    renamelimit = 100000
+	conflictstyle = diff3
+[alias]
+	co = checkout
+	br = branch
+	ci = commit
+	st = status
+	unstage = reset HEAD --
+	last = log -1 HEAD
+	visual = !gitk
+    dif = difftool --dir-diff
+[credential]
+	helper = store
+[difftool]
+	prompt = no

@@ -1,0 +1,448 @@
+'''
+Copyright 2018-2024 Johan Cockx, Matic Kukovec and Kristof Mulier
+'''
+# This file is a example of how the source analyzer can be used in Python.
+# The idea is to use this as template for the real implementation.
+# It is also used in regression tests.
+
+import source_analyzer as ce
+import LineOffsetTable
+import sys
+import os
+import subprocess
+import pathlib
+import re
+import shlex
+import time
+import threading
+import platform
+import inspect
+import shutil
+import traceback
+
+silent=0
+
+def eprint(*args, **kwargs):
+    if not silent:
+        ce._eprint(*args, **kwargs)
+
+# OS name (linux or windows).
+# In MSYS UCRT64, platform.system() is 'MINGW64_NT-10.0-19045'
+# In a cmd shell and in MSYS MINGW64,  it is 'Windows'
+# On Linux, it is 'Linux'
+_osname = "linux" if platform.system().lower() == "linux" else "windows"
+
+def flag_list_repr(flags):
+    return ' '.join([f'"{flag}"' if ' ' in flag else flag for flag in flags])
+
+def stdpath(path, workdir = '.'):
+    return ce._standard_path(path, workdir)
+
+def is_nested_in(path, folder):
+    return path.startswith(folder) and (
+        len(path) == len(folder) or path[len(folder)] == '/'
+    )
+
+def get_rel_path(path, folder):
+    return os.path.relpath(path, folder).replace('\\', '/')
+
+def insert_after(list, elem, after):
+    if not after:
+        return [elem] + list;
+    out = []
+    for item in list:
+        out.append(item)
+        if item == after:
+            out.append(elem)
+    return out
+
+def remove(list, elem):
+    out = []
+    for item in list:
+        if item != elem:
+            out.append(item)
+    return out
+
+dev_dir = os.path.dirname(
+    os.path.realpath(inspect.getfile(inspect.currentframe()))
+).replace('\\', '/')
+
+test_dir = dev_dir + '/test'
+
+toolchain_dir = stdpath(os.environ['TOOLCHAIN_DIR'])
+eprint(f'toolchain dir: {toolchain_dir}')
+
+build_env = os.environ.copy()
+build_env['PATH'] = toolchain_dir + '/bin' + os.pathsep + build_env['PATH']
+PATH=build_env['PATH']
+eprint(f'PATH={PATH}')
+
+ce.init("sys/" + _osname + "/lib/libsource_analyzer.so", debug=True)
+ce.set_number_of_workers(4)
+
+trace = False
+
+entity_kind_global_function = ce.entity_kind('global function')
+entity_kind_global_variable = ce.entity_kind('global variable')
+entity_kind_static_variable = ce.entity_kind('static variable')
+entity_kind_parameter = ce.entity_kind('parameter')
+entity_kind_automatic_variable = ce.entity_kind('automatic variable')
+entity_kind_local_static_variable = ce.entity_kind('local static variable')
+entity_kind_local_function = ce.entity_kind('local function')
+entity_kind_type = ce.entity_kind('type')
+entity_kind_macro = ce.entity_kind('macro')
+
+cleared_cache_dirs = set()
+
+def _get_rel_path(path, folder):
+    return os.path.relpath(path, folder).replace('\\', '/')
+
+class Project(ce.Project):
+    ignore_undefined_globals = False
+    
+    def __init__(
+            self,
+            build_dir,
+            makefile,
+            source_dir = None,
+            cache_dir = None,
+            env = {},
+    ):
+        build_dir = stdpath(build_dir)
+        eprint(f"Build dir:  {build_dir}")
+        os.makedirs(build_dir, exist_ok=True)
+        if source_dir:
+            self.source_dir = stdpath(source_dir)
+        else:
+            self.source_dir = stdpath('../source', build_dir)
+        eprint(f"Source dir: {self.source_dir}")
+        if cache_dir:
+            cache_dir = stdpath(cache_dir)
+        else:
+            cache_dir = build_dir + '.cache'
+        eprint(f"Cache dir:  {cache_dir}")
+        os.makedirs(cache_dir, exist_ok=True)
+        if not cache_dir in cleared_cache_dirs:
+            eprint(f"Clear cache dir {cache_dir} (first use in this test run)")
+            shutil.rmtree(cache_dir)
+            cleared_cache_dirs.add(cache_dir)
+        makefile = _get_rel_path(
+            os.path.join(build_dir,makefile), build_dir
+        )
+        eprint(f"Makefile:  {makefile}")
+        os.makedirs(cache_dir, exist_ok=True)
+        self.make_command = [
+            'make', '-f', makefile,
+            f'TOOLPREFIX={toolchain_dir}/bin/arm-none-eabi-',
+            f'TOOLCHAIN={toolchain_dir}/bin/', # For backward compatibility 
+        ]
+        self.env = { **build_env, **env}
+        super().__init__(
+            project_path = self.source_dir,
+            cache_path = cache_dir,
+            resource_path = stdpath('sys/esa'),
+            lib_path = stdpath('sys/' + _osname + '/lib'),
+        )
+        self.set_make_config(self.make_command, self.env)
+        self.set_build_path(build_dir)
+        self.fail_count = 0  # Count analysis failures (file not found, crash)
+        self.pending = 0
+        self.included_files = set()
+        self.linked_files = set()
+        self.used_hdirs = set()
+        self.warning_count = 0
+        self.error_count = 0
+        self.set_diagnostic_limit(ce.Severity.WARNING, 30);
+        self.set_diagnostic_limit(ce.Severity.ERROR, 30);
+        self._analysis_status = {}
+        self.project_status = ce.ProjectStatus.READY
+        self.linker_status = ce.LinkerStatus.ERROR
+        self.tracked = set()
+        self.offsets = {}
+        self.diagnostics = []
+
+    def offset(self, path, line, column):
+        #eprint(f'{path} ---> {self.abs_source_path(path)}')
+        table = self.offsets.get(path)
+        if not table:
+            eprint(f'Load line offsets for {path}')
+            with open(self.abs_source_path(path), mode='rb') as file:
+                table = LineOffsetTable.LineOffsetTable(file.read())
+            self.offsets[path] = table
+        return table.offset(line, column)
+
+    def reload_file(self, path):
+        print(f'Reload {path}')
+        self.offsets.pop(path, None)
+        super().reload_file(path)
+        
+    def srcpath(self, path):
+        return self.standard_source_path(path)
+
+    def hdir_used(self, hdir):
+        return stdpath(hdir, self.source_dir) in self.used_hdirs
+        
+    def file_included(self, file):
+        return self.standard_source_path(file) in self.included_files
+
+    def file_linked(self, file):
+        return self.standard_source_path(file) in self.linked_files
+
+    def get_diagnostics(self):
+        return [
+            (f'{d.path}:{d.offset}:' if d.path else '')
+            + f' {ce.severity_name(d.severity)}: {d.message}'
+            for d in self.diagnostics
+        ]
+
+    def print_diagnostics(self):
+        eprint("diagnostics ({}): \n{}".format(
+            self.get_diagnostic_count(),
+            '\n'.join(self.get_diagnostics())
+        ))
+
+    def get_diagnostic_count(self):
+        return len(self.diagnostics)
+        #return sum([1 for d in self.diagnostic_set])
+
+    def report_project_status(self, status):
+        eprint(
+            f'Change project status to {ce.project_status_name(status)}'
+        )
+        self.project_status = status
+        
+    # Callback from source analyzer when the linker status changes. The initial
+    # status is 'error', because initially no main function is defined (before
+    # files are added). All changes are reported.
+    def report_linker_status(self, status):
+        eprint(f"Change linker status to {ce.linker_status_name(status)}")
+        self.linker_status = status
+
+    # Callback from source analyzer when an hdir changes from being used to
+    # unused or vice versa. The source analyzer assumes that all hdirs are
+    # initially unused and reports all changes.
+    def report_hdir_usage(self, path, used):
+        eprint(f'Hdir used={used}: {path}')
+        assert isinstance(used, bool)
+        if used:
+            self.used_hdirs.add(path)
+        else:
+            self.used_hdirs.remove(path)
+
+    # Callback from source analyzer to add a diagnostic. The source analyzer
+    # assumes that initially, there are no diagnostics.  All changes are
+    # reported using callbacks to add and remove diagnostics. This add
+    # diagnostic callback should return a Python object (of any type) that
+    # uniquely identifies the diagnostic. The call to remove the diagnostic will
+    # get this object as a parameter.
+    def add_diagnostic(self, message, severity, category, path, offset, after):
+        srcpath = self.srcpath(path) if path else None
+        # Report location in emacs-style: 1-based line, 0-based column
+        eprint(
+            f"Insert {ce.severity_name(severity)}: "
+            f"[{ce.category_name(category)}] {message} at "
+            f"{srcpath}:{offset} after {after}"
+        )
+        if severity is ce.Severity.WARNING:
+            self.warning_count = self.warning_count + 1
+        if severity is ce.Severity.ERROR:
+            self.error_count = self.error_count + 1
+        diagnostic = Diagnostic(message, severity, srcpath, offset)
+        self.diagnostics = insert_after(self.diagnostics, diagnostic, after)
+        return diagnostic
+
+    # Callback from source analyzer to remove a diagnostic previously added by
+    # the add diagnostic callback. The parameter is the Python object returned
+    # by the add diagnostic callback.
+    def remove_diagnostic(self, diagnostic):
+        # Report location in emacs-style: 1-based line, 0-based column
+        eprint(
+            f"Remove {ce.severity_name(diagnostic.severity)}: "
+            f"{diagnostic.message} at "
+            f"{diagnostic.path}:{diagnostic.offset}"
+        )
+        self.diagnostics = remove(self.diagnostics, diagnostic)
+        if diagnostic.severity is ce.Severity.WARNING:
+            self.warning_count = self.warning_count - 1
+        if diagnostic.severity is ce.Severity.ERROR:
+            self.error_count = self.error_count - 1
+
+    def report_more_diagnostics(self, severity, count):
+        eprint(f'{count} hidden {ce.severity_name(severity)}s')
+
+    def add_occurrence(self, data, scope):
+        occurrence = Occurrence(data, scope)
+        eprint(f'track {occurrence}')
+        self.tracked.add(occurrence)
+        return occurrence
+
+    # Callback from source analyzer to remove a tracked occurrence previously
+    # added by the add occurrence callback. The parameter is the Python object
+    # returned by the add occurrence callback. The default implementation does
+    # nothing.
+    def remove_occurrence(self, occurrence):
+        eprint(f'untrack {occurrence}')
+        self.tracked.remove(occurrence)
+
+    # Callback from source analyzer when the inclusion status of a file in this
+    # project changes.
+    def report_file_inclusion_status(self, raw_path, status):
+        path = self.standard_source_path(raw_path)
+        eprint(f"Change inclusion status to {status} for {path}")
+        if status:
+            self.included_files.add(path)
+        else:
+            self.included_files.discard(path)
+
+    # Callback from source analyzer when the link status of a file in this
+    # project changes.
+    def report_file_link_status(self, raw_path, status):
+        path = self.standard_source_path(raw_path)
+        eprint(f"Change link inclusion status to {status} for {path}")
+        if status:
+            self.linked_files.add(path)
+        else:
+            self.linked_files.discard(path)
+
+    def get_file_inclusion_status(self, raw_path):
+        path = self.standard_source_path(raw_path)
+        if path in self.included_files or path in self.linked_files:
+            return ce.InclusionStatus.INCLUDED
+        return ce.InclusionStatus.EXCLUDED
+
+    # Callback when the analysis progress of the project changes.  Progress is
+    # current/total*100%. When current is equal to total, the total will be
+    # reset before the next call.
+    #
+    # Parameters:
+    #  - "current": the number of files analyzed
+    #  - "total": the total number of files to be analyzed
+    #
+    def report_progress(self, current, total):
+        eprint("progress {}/{}".format(current, total))
+        self.pending = total - current
+
+    # Callback from source analyzer when the analysis status of a file in this
+    # project changes.
+    def report_file_analysis_status(self, raw_path, status):
+        path = self.standard_source_path(raw_path)
+        eprint(
+            f'Change analysis status to {ce.analysis_status_name(status)}'
+            f' for {path}'
+        )
+        old_status = self._analysis_status.get(path, ce.AnalysisStatus.NONE)
+        self._analysis_status[path] = status
+        if old_status == ce.AnalysisStatus.FAILED:
+            self.fail_count -= 1
+        if status == ce.AnalysisStatus.FAILED:
+            self.fail_count += 1
+
+    def get_file_analysis_status(self, raw_path):
+        path = self.standard_source_path(raw_path)
+        return self._analysis_status.get(path, ce.AnalysisStatus.NONE)
+
+    def report_compilation_settings(self, file, compiler, flags):
+        if False:
+            path = self.standard_source_path(file)
+            eprint(
+                f"Compilation settings for {path}:\n"
+                f"    compiler: {compiler}\n"
+                f"    flags: {flag_list_repr(flags)}"
+            )
+
+    def report_embeetle_version_in_makefile(self, version):
+        if False:
+            eprint(f"Embeetle version in makefile: {version}")
+
+    def report_internal_error(self, message):
+        """Callback called when an internal error occurs in a background thread
+
+        When this callback is called,  the source analyzer will no longer work
+        and cannot recover.  It is advisable to save all edits and restart
+        Embeetle.
+
+        """
+        eprint("SA FATAL: internal error - save changes and restart Embeetle")
+        eprint(f"Details: {message}")
+        #os._exit(1)
+
+    # Aux functions for testing below
+
+    # Add a file and return its path. A relative path is relative to the source
+    # directory.
+    def get_file(self, path, user_data=None):
+        self.add_file(path, ce.file_mode_automatic, user_data)
+        return path
+
+    # Click at position in emacs coordinates (one-based line, zero-based column)
+    # and return occurrence found.
+    def click(self, file, line, column, verbose=True):
+        offset = self.offset(file, line-1, column)
+        if verbose:
+            eprint(f"click at {file}:{line}:{column} (offset={offset})")
+        ref = self.find_occurrence(file, offset)
+        if not ref:
+            if verbose:
+                eprint(" `-> no entity found")
+        else:
+           if verbose:
+               eprint(f' `-> found {ref}')
+        return ref
+
+    def wait_for_analysis(self):
+        eprint(f"Wait for project analysis (status={self.project_status})")
+        start = time.time()
+        # Make sure source analysis is running. If compiled with NO_THREADS (for
+        # debugging), this runs the analysis.
+        ce.start()
+        while self.project_status == ce.ProjectStatus.BUSY:
+            time.sleep(0.1)
+        eprint(f"... ready after {time.time()-start:.1f} seconds")
+
+    # Return a user-friendly path for a given source path. The normalized path
+    # is relative to the project when project-local.
+    def standard_source_path(self, path):
+        project_path = ce._standard_path(
+            self.source_path, self.build_path
+        )
+        src_path = ce._standard_path(path, project_path)
+        if is_nested_in(src_path, project_path):
+            return get_rel_path(src_path, project_path)
+        return src_path
+
+    # Return an absolute path for a given source path
+    def abs_source_path(self, path):
+        project_path = ce._standard_path(
+            self.source_path, self.build_path
+        )
+        return ce._standard_path(path, project_path)
+
+class Diagnostic:
+    def __init__(self, message, severity, path, offset):
+        self.message = message
+        self.severity = severity
+        self.path = path
+        self.offset = offset
+
+    def __del__(self):
+        #eprint("delete diagnostic")
+        pass
+
+    def __str__(self):
+        return (
+            f'{ce.severity_name(self.severity)}: {self.message}'
+            f' at {self.path}:{self.offset}'
+        )
+
+class Occurrence:
+    def __init__(self, data, scope):
+        self.data = data
+        self.scope = scope
+
+    def __del__(self):
+        #eprint("delete diagnostic")
+        pass
+
+    def __str__(self):
+        return f'{self.data} in scope of {self.scope}'
+

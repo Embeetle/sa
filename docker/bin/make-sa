@@ -1,0 +1,3 @@
+#!/bin/bash
+source ~/.bashrc
+make -C ~/bld/sa -f ~/sa/Makefile "$@"

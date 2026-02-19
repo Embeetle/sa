@@ -1,0 +1,7 @@
+# ------------------------------------------- #
+#                                             #
+#              OpenOCD commands               #
+#              FOR STM32F303VCTx
+#                                             #
+# ------------------------------------------- #
+openocd -f board_stm32f3.cfg -f probe_stlink.cfg -s ocd_scripts -c "init; reset halt"
