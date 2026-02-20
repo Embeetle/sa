@@ -52,7 +52,13 @@ SA_SYS = sys-$(OS)-$(ARCH)
 ################################################################################
 
 .PHONY: default
-default: selftest test
+
+# Run selftest + test, then print a summary at the end.
+# Note: 'install' is NOT run by default anymore.
+default:
+	+@$(MAKE) --no-print-directory selftest
+	+@$(MAKE) --no-print-directory test
+	@$(MAKE) --no-print-directory build-summary
 
 # Define SOURCE and vpaths for shadow building
 # Do NOT define VPATH,  or a vpath that matches 'sys'!
@@ -374,6 +380,9 @@ $(CLANG_INCLUDER_TARGETS): \
 # The sys lib folder where compiled code (Clang, SA, ...) is installed
 SA_SYSLIB = $(SA_SYS)/lib
 
+# Absolute build output location (MSYS path)
+SA_SYS_ABS = $(CURDIR)/$(SA_SYS)
+
 # Files installed into SA_SYS in addition to $(SOURCE)/sys
 SA_CLANG = $(SA_SYSLIB)/clang$(EXE)
 SA_LLD = $(SA_SYSLIB)/lld$(EXE)
@@ -428,6 +437,28 @@ $(SA_SYS): $(SOURCE)/sys \
 	cp $(SOURCE)/source_analyzer.py $(SA_WRAPPER)
 	cp libsource_analyzer.so $(SA_SO)
 	$(finalize-sys)
+
+# Print a summary at the end of the default build.
+.PHONY: build-summary
+build-summary: sys
+	@echo
+	@echo "============================================================"
+	@echo "Build finished successfully."
+	@echo
+	@echo "Build output directory:"
+	@echo "  $(SA_SYS_ABS)"
+	@if [ "$(OS)" = "windows" ]; then \
+	  echo "  (Windows path) $(PATHPREFIX)$(SA_SYS_ABS)"; \
+	fi
+	@echo
+	@echo "NOTE:"
+	@echo "  The 'install' target does NOT run by default anymore."
+	@echo "  To use this build, copy/move the contents of the build output"
+	@echo "  directory above into your Embeetle installation's sys folder."
+	@echo
+	@echo "  (Optional) If you still want the old behavior, run: make install"
+	@echo "============================================================"
+	@echo
 
 # Add a version file after checking that all source files are checked in
 .PHONY: version-stamp

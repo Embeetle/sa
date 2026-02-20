@@ -20,7 +20,7 @@ import inspect
 import shutil
 import traceback
 
-silent=0
+silent = 0
 
 def eprint(*args, **kwargs):
     if not silent:
@@ -32,6 +32,8 @@ def eprint(*args, **kwargs):
 # On Linux, it is 'Linux'
 _osname = "linux" if platform.system().lower() == "linux" else "windows"
 
+# Normalize architecture name so it matches your sys folder naming convention.
+# Example: amd64/x64 -> x86_64
 def _normalize_arch(arch: str) -> str:
     a = (arch or "").lower()
     if a in ("amd64", "x64"):
@@ -43,7 +45,12 @@ _arch = _normalize_arch(platform.machine())
 def flag_list_repr(flags):
     return ' '.join([f'"{flag}"' if ' ' in flag else flag for flag in flags])
 
-def stdpath(path, workdir = '.'):
+def stdpath(path, workdir='.'):
+
+    # Use the source_analyzer path normalizer:
+    #  - expands env vars and ~
+    #  - uses '/' separators even on Windows
+    #  - resolves relative paths relative to workdir
     return ce._standard_path(path, workdir)
 
 def _normslashes(p: str) -> str:
@@ -59,7 +66,7 @@ def get_rel_path(path, folder):
 
 def insert_after(list, elem, after):
     if not after:
-        return [elem] + list;
+        return [elem] + list
     out = []
     for item in list:
         out.append(item)
@@ -74,54 +81,87 @@ def remove(list, elem):
             out.append(item)
     return out
 
+
+# -----------------------------------------------------------------------------
+# Sys layout resolution
+# -----------------------------------------------------------------------------
+#
+# We support multiple sys layouts (because the Makefile was changed):
+#
+#   1) old layout:
+#        sys/<os>/lib/libsource_analyzer.so
+#
+#   2) new layout (flattened, named by OS+arch):
+#        sys-<os>-<arch>/lib/libsource_analyzer.so
+#
+#   3) flattened but still called 'sys':
+#        sys/lib/libsource_analyzer.so
+#
+# Additionally, tests often run from a per-test build directory like:
+#     .../bld/sa/test/pic32
+# while sys lives one or more parents higher:
+#     .../bld/sa/sys-windows-x86_64
+#
+# Therefore we search *upward* through parent directories until root.
+#
+# You can override detection by setting:
+#     SA_SYS=<path-or-name>
+# where SA_SYS may be absolute or relative. Relative is tried at each search root.
+#
+
+def _iter_search_roots(base_dir: str) -> list[pathlib.Path]:
+    """
+    Return a list of directories to search for sys layouts:
+    base_dir, base_dir/.., base_dir/../.., ... up to filesystem root.
+    """
+    p = pathlib.Path(stdpath(base_dir)).resolve()
+    roots = [p]
+    while True:
+        parent = p.parent
+        if parent == p:
+            break
+        roots.append(parent)
+        p = parent
+    return roots
+
 def _resolve_sa_sys_layout(base_dir: str = '.') -> tuple[str, str, str, str]:
     """
     Resolve paths for:
-      - sys root directory (folder containing 'esa' and 'lib' (flattened) OR '<os>/lib' (old))
+      - sys root directory (folder containing 'esa' and 'lib' (new) or '<os>/lib' (old))
       - resource dir (..../esa)
       - lib dir (..../lib OR ..../<os>/lib)
       - full path to the source analyzer shared library
 
-    Supports these layouts (and mixed variants):
+    Supports these layouts:
       - old: sys/<os>/lib/libsource_analyzer.so
       - new: sys-<os>-<arch>/lib/libsource_analyzer.so  (flattened)
-      - flattened named 'sys': sys/lib/libsource_analyzer.so   <-- added
-    Also allows override via env var SA_SYS, which may be absolute or relative,
-    and may even point at sys/<os> or sys/<os>/lib or sys/lib.
+      - flattened named 'sys': sys/lib/libsource_analyzer.so
+    Also allows override via env var SA_SYS, which may be absolute or relative.
     """
-    base = pathlib.Path(stdpath(base_dir)).resolve()
 
-    # Candidate shared library filenames we might encounter on different platforms/builds.
-    # (Your build currently uses libsource_analyzer.so even on Windows, but keep this robust.)
+    # Candidate shared library filenames we might encounter.
+    # (Some builds use .so even on Windows under MSYS; keep both here.)
     libnames = [
         "libsource_analyzer.so",
         "libsource_analyzer.dll",
         "source_analyzer.dll",
     ]
 
-    candidates: list[str] = []
-    env_sa_sys = os.environ.get("SA_SYS")
-    if env_sa_sys:
-        candidates.append(env_sa_sys)
-
-    # Prefer the most specific new layout first, then other reasonable defaults.
-    candidates += [
+    # Candidate sys folder names (relative names).
+    # Order matters: prefer the most specific first.
+    rel_candidates = [
         f"sys-{_osname}-{_arch}",
         f"sys-{_osname}",
         "sys",
     ]
 
-    # Deduplicate while preserving order
-    seen = set()
-    uniq = []
-    for c in candidates:
-        if c not in seen:
-            uniq.append(c)
-            seen.add(c)
+    env_sa_sys = os.environ.get("SA_SYS")
 
-    tried = []
+    tried: list[str] = []
+    search_roots = _iter_search_roots(base_dir)
 
     def try_libdir(rootdir: pathlib.Path, libdir: pathlib.Path) -> tuple[str, str, str, str] | None:
+        # Try all known library filenames inside libdir
         for name in libnames:
             so = libdir / name
             tried.append(_normslashes(str(so)))
@@ -135,25 +175,26 @@ def _resolve_sa_sys_layout(base_dir: str = '.') -> tuple[str, str, str, str]:
 
     def check_candidate_path(p: pathlib.Path) -> tuple[str, str, str, str] | None:
         """
-        Given a candidate path p (which can be sys root, sys/<os>, sys/lib, sys/<os>/lib, etc),
-        infer the likely rootdir and libdir(s) to try.
+        Given a candidate path p (which can be sys root, sys/<os>, sys/lib,
+        sys/<os>/lib, etc), infer rootdir and libdir(s) to try.
         """
         if not p.exists():
             return None
 
         # If SA_SYS points directly to a lib directory: .../lib
         if p.is_dir() and p.name == "lib":
-            rootdir = p.parent
-            # rootdir might be sys or sys/<os> (in old layout sys/<os>/lib)
-            # If it's sys/<os>, the real sys root is the parent containing 'esa'
+            libdir = p
+            rootdir = libdir.parent
+
+            # old layout: sys/<os>/lib, where sys root is parent of <os>
             if rootdir.name == _osname and (rootdir.parent / "esa").is_dir():
-                # old layout, SA_SYS pointed to sys/<os>/lib
                 real_root = rootdir.parent
-                found = try_libdir(real_root, p)
+                found = try_libdir(real_root, libdir)
                 if found:
                     return found
-            # flattened layout (sys/lib or sys-.../lib)
-            found = try_libdir(rootdir, p)
+
+            # flattened layout: sys/lib or sys-.../lib
+            found = try_libdir(rootdir, libdir)
             if found:
                 return found
             return None
@@ -165,24 +206,20 @@ def _resolve_sa_sys_layout(base_dir: str = '.') -> tuple[str, str, str, str]:
             found = try_libdir(rootdir, libdir)
             if found:
                 return found
-            # also tolerate sys/<os> being actually a flattened sys root mistakenly named like the OS
-            found = try_libdir(p, p / "lib")
-            if found:
-                return found
             return None
 
         # If SA_SYS points to sys root directory (or sys-... root)
         if p.is_dir():
             rootdir = p
 
-            # Important: this explicitly covers the requested layout:
-            #   sys/lib/libsource_analyzer.so
-            # because rootdir="sys" and libdir="sys/lib".
+            # Support both:
+            #   sys/lib/libsource_analyzer.*
+            # and:
+            #   sys/<os>/lib/libsource_analyzer.*
             libdirs = [
-                rootdir / "lib",              # flattened layout (sys/lib or sys-.../lib)
-                rootdir / _osname / "lib",    # old layout (sys/<os>/lib)
+                rootdir / "lib",              # flattened layout (including sys/lib)
+                rootdir / _osname / "lib",    # old layout
             ]
-
             for libdir in libdirs:
                 found = try_libdir(rootdir, libdir)
                 if found:
@@ -191,57 +228,95 @@ def _resolve_sa_sys_layout(base_dir: str = '.') -> tuple[str, str, str, str]:
 
         return None
 
-    # Try candidates relative to base_dir (and absolute if given)
-    for cand in uniq:
-        cand_path = pathlib.Path(cand)
-        if not cand_path.is_absolute():
-            cand_path = base / cand_path
-        found = check_candidate_path(cand_path)
-        if found:
-            return found
+    # 1) If SA_SYS is absolute, try it first (no need to walk parents)
+    if env_sa_sys:
+        env_path = pathlib.Path(env_sa_sys)
+        if env_path.is_absolute():
+            found = check_candidate_path(env_path)
+            if found:
+                return found
 
-    # Last-resort: glob for any sys*/**/libsource_analyzer.(so|dll) under base
-    # (We include dll variants too.)
-    glob_hits = []
-    for pat in ("sys*/**/libsource_analyzer.so", "sys*/**/libsource_analyzer.dll", "sys*/**/source_analyzer.dll"):
-        glob_hits.extend(list(base.glob(pat)))
+    # 2) Search upward through parents: at each root, try SA_SYS (if relative) and default candidates
+    for root in search_roots:
 
-    if glob_hits:
-        def score(p: pathlib.Path) -> tuple[int, int]:
-            s = _normslashes(str(p))
-            bonus = 0
-            if f"sys-{_osname}-{_arch}" in s:
-                bonus -= 100
-            elif f"sys-{_osname}" in s:
-                bonus -= 50
-            elif "/sys/" in s:
-                bonus -= 10
-            return (bonus, len(s))
+        # SA_SYS relative: interpret relative to each search root
+        if env_sa_sys:
+            env_path = pathlib.Path(env_sa_sys)
+            if not env_path.is_absolute():
+                found = check_candidate_path(root / env_path)
+                if found:
+                    return found
 
-        best = sorted(glob_hits, key=score)[0]
-        libdir = best.parent
+        # Default relative candidates
+        for cand in rel_candidates:
+            found = check_candidate_path(root / cand)
+            if found:
+                return found
 
-        # Infer rootdir:
-        # - if .../<os>/lib then root is .../sys
-        # - if .../lib then root is parent of libdir
-        if libdir.parent.name == _osname:
-            rootdir = libdir.parent.parent
-        else:
-            rootdir = libdir.parent
+        # 3) Last-resort (per root): glob sys*/**/... under that root.
+        # This catches odd layouts without baking in more assumptions.
+        glob_hits = []
+        for pat in (
+            "sys*/**/libsource_analyzer.so",
+            "sys*/**/libsource_analyzer.dll",
+            "sys*/**/source_analyzer.dll",
+        ):
+            try:
+                glob_hits.extend(list(root.glob(pat)))
+            except Exception:
+                pass
 
-        root = _normslashes(str(rootdir))
-        resdir = _normslashes(str(rootdir / "esa"))
-        libd = _normslashes(str(libdir))
-        sop = _normslashes(str(best))
-        return root, resdir, libd, sop
+        if glob_hits:
+            # Prefer the most specific match (sys-<os>-<arch>) if present.
+            def score(p: pathlib.Path) -> tuple[int, int]:
+                s = _normslashes(str(p))
+                bonus = 0
+                if f"sys-{_osname}-{_arch}" in s:
+                    bonus -= 100
+                elif f"sys-{_osname}" in s:
+                    bonus -= 50
+                elif "/sys/" in s:
+                    bonus -= 10
+                return (bonus, len(s))
+
+            best = sorted(glob_hits, key=score)[0]
+            libdir = best.parent
+
+            # Infer rootdir:
+            # - if .../<os>/lib then root is .../sys
+            # - if .../lib then root is parent of libdir
+            if libdir.parent.name == _osname:
+                rootdir = libdir.parent.parent
+            else:
+                rootdir = libdir.parent
+
+            root_s = _normslashes(str(rootdir))
+            resdir_s = _normslashes(str(rootdir / "esa"))
+            libd_s = _normslashes(str(libdir))
+            so_s = _normslashes(str(best))
+            return root_s, resdir_s, libd_s, so_s
+
+    # Fail with helpful diagnostics
+    roots_str = "\n  - ".join(_normslashes(str(r)) for r in search_roots[:8])
+    if len(search_roots) > 8:
+        roots_str += "\n  - ..."
+
+    tried_str = "\n  - ".join(tried) if tried else "(no existing candidate directories found under search roots)"
 
     raise FileNotFoundError(
         "Could not locate source analyzer shared library.\n"
-        "Tried these locations:\n  - " + "\n  - ".join(tried) +
-        "\nAlso searched sys*/**/(libsource_analyzer.so|libsource_analyzer.dll|source_analyzer.dll) under:\n  " +
-        _normslashes(str(base)) +
-        "\nIf needed, set SA_SYS to the sys folder name/path (e.g. sys-windows-x86_64, sys, or an absolute path)."
+        "Searched upwards from:\n  - "
+        + _normslashes(str(pathlib.Path(stdpath(base_dir)).resolve())) + "\n"
+        "Search roots (first ones):\n  - " + roots_str + "\n"
+        "Tried these library paths:\n  - " + tried_str + "\n"
+        "If needed, set SA_SYS to the sys folder name/path "
+        "(e.g. sys-windows-x86_64, sys, or an absolute path)."
     )
+
+
+# -----------------------------------------------------------------------------
+# Locate our development folder and test folder
+# -----------------------------------------------------------------------------
 
 dev_dir = os.path.dirname(
     os.path.realpath(inspect.getfile(inspect.currentframe()))
@@ -249,15 +324,30 @@ dev_dir = os.path.dirname(
 
 test_dir = dev_dir + '/test'
 
+
+# -----------------------------------------------------------------------------
+# Toolchain setup for tests
+# -----------------------------------------------------------------------------
+
 toolchain_dir = stdpath(os.environ['TOOLCHAIN_DIR'])
 eprint(f'toolchain dir: {toolchain_dir}')
 
 build_env = os.environ.copy()
 build_env['PATH'] = toolchain_dir + '/bin' + os.pathsep + build_env['PATH']
-PATH=build_env['PATH']
+PATH = build_env['PATH']
 eprint(f'PATH={PATH}')
 
-# Resolve sys layout relative to current working directory (typically the build dir)
+
+# -----------------------------------------------------------------------------
+# Initialize the source analyzer shared library (once per Python process)
+# -----------------------------------------------------------------------------
+#
+# We resolve the sys layout relative to the current working directory.
+# This is typically the top-level build directory (e.g. ~/bld/sa), but during
+# some test runs it may be a per-test build directory; the resolver searches
+# upward to find sys.
+#
+
 _sa_sys_root, _sa_resource_dir, _sa_lib_dir, _sa_so_path = _resolve_sa_sys_layout(os.getcwd())
 eprint(f"SA sys root:     {_sa_sys_root}")
 eprint(f"SA resource dir: {_sa_resource_dir}")
@@ -268,6 +358,11 @@ ce.init(_sa_so_path, debug=True)
 ce.set_number_of_workers(4)
 
 trace = False
+
+
+# -----------------------------------------------------------------------------
+# Entity kinds used in tests
+# -----------------------------------------------------------------------------
 
 entity_kind_global_function = ce.entity_kind('global function')
 entity_kind_global_variable = ce.entity_kind('global variable')
@@ -284,6 +379,11 @@ cleared_cache_dirs = set()
 def _get_rel_path(path, folder):
     return os.path.relpath(path, folder).replace('\\', '/')
 
+
+# -----------------------------------------------------------------------------
+# Project wrapper used in regression tests
+# -----------------------------------------------------------------------------
+
 class Project(ce.Project):
     ignore_undefined_globals = False
 
@@ -291,19 +391,22 @@ class Project(ce.Project):
             self,
             build_dir,
             makefile,
-            source_dir = None,
-            cache_dir = None,
-            env = {},
+            source_dir=None,
+            cache_dir=None,
+            env={},
     ):
         build_dir = stdpath(build_dir)
         eprint(f"Build dir:  {build_dir}")
         os.makedirs(build_dir, exist_ok=True)
 
-        # Resolve sys layout relative to the build directory (more robust than cwd)
+        # Resolve sys layout relative to THIS build_dir.
+        # Important: build_dir is often a per-test directory under .../test/<name>,
+        # while sys lives at .../bld/sa/sys-... . The resolver searches upward.
         sa_sys_root, sa_resource_dir, sa_lib_dir, sa_so_path = _resolve_sa_sys_layout(build_dir)
         eprint(f"SA sys root (for this project): {sa_sys_root}")
         eprint(f"SA resource dir:               {sa_resource_dir}")
         eprint(f"SA lib dir:                    {sa_lib_dir}")
+        eprint(f"SA library:                    {sa_so_path}")
 
         if source_dir:
             self.source_dir = stdpath(source_dir)
@@ -316,34 +419,38 @@ class Project(ce.Project):
         else:
             cache_dir = build_dir + '.cache'
         eprint(f"Cache dir:  {cache_dir}")
-
         os.makedirs(cache_dir, exist_ok=True)
-        if not cache_dir in cleared_cache_dirs:
+
+        # Clear cache directory once per test run
+        if cache_dir not in cleared_cache_dirs:
             eprint(f"Clear cache dir {cache_dir} (first use in this test run)")
             shutil.rmtree(cache_dir)
             cleared_cache_dirs.add(cache_dir)
 
+        # Makefile path relative to build directory
         makefile = _get_rel_path(
-            os.path.join(build_dir,makefile), build_dir
+            os.path.join(build_dir, makefile), build_dir
         )
         eprint(f"Makefile:  {makefile}")
-        os.makedirs(cache_dir, exist_ok=True)
 
         self.make_command = [
             'make', '-f', makefile,
             f'TOOLPREFIX={toolchain_dir}/bin/arm-none-eabi-',
-            f'TOOLCHAIN={toolchain_dir}/bin/', # For backward compatibility
+            f'TOOLCHAIN={toolchain_dir}/bin/',  # For backward compatibility
         ]
-        self.env = { **build_env, **env}
+        self.env = {**build_env, **env}
 
+        # Initialize C++ project
         super().__init__(
-            project_path = self.source_dir,
-            cache_path = cache_dir,
-            resource_path = sa_resource_dir,
-            lib_path = sa_lib_dir,
+            project_path=self.source_dir,
+            cache_path=cache_dir,
+            resource_path=sa_resource_dir,
+            lib_path=sa_lib_dir,
         )
         self.set_make_config(self.make_command, self.env)
         self.set_build_path(build_dir)
+
+        # Status bookkeeping for tests
         self.fail_count = 0  # Count analysis failures (file not found, crash)
         self.pending = 0
         self.included_files = set()
@@ -351,8 +458,8 @@ class Project(ce.Project):
         self.used_hdirs = set()
         self.warning_count = 0
         self.error_count = 0
-        self.set_diagnostic_limit(ce.Severity.WARNING, 30);
-        self.set_diagnostic_limit(ce.Severity.ERROR, 30);
+        self.set_diagnostic_limit(ce.Severity.WARNING, 30)
+        self.set_diagnostic_limit(ce.Severity.ERROR, 30)
         self._analysis_status = {}
         self.project_status = ce.ProjectStatus.READY
         self.linker_status = ce.LinkerStatus.ERROR
@@ -429,11 +536,8 @@ class Project(ce.Project):
             self.used_hdirs.remove(path)
 
     # Callback from source analyzer to add a diagnostic. The source analyzer
-    # assumes that initially, there are no diagnostics.  All changes are
-    # reported using callbacks to add and remove diagnostics. This add
-    # diagnostic callback should return a Python object (of any type) that
-    # uniquely identifies the diagnostic. The call to remove the diagnostic will
-    # get this object as a parameter.
+    # assumes that initially, there are no diagnostics. All changes are
+    # reported using callbacks to add and remove diagnostics.
     def add_diagnostic(self, message, severity, category, path, offset, after):
         srcpath = self.srcpath(path) if path else None
         # Report location in emacs-style: 1-based line, 0-based column
@@ -451,8 +555,7 @@ class Project(ce.Project):
         return diagnostic
 
     # Callback from source analyzer to remove a diagnostic previously added by
-    # the add diagnostic callback. The parameter is the Python object returned
-    # by the add diagnostic callback.
+    # the add diagnostic callback.
     def remove_diagnostic(self, diagnostic):
         # Report location in emacs-style: 1-based line, 0-based column
         eprint(
@@ -476,9 +579,7 @@ class Project(ce.Project):
         return occurrence
 
     # Callback from source analyzer to remove a tracked occurrence previously
-    # added by the add occurrence callback. The parameter is the Python object
-    # returned by the add occurrence callback. The default implementation does
-    # nothing.
+    # added by the add occurrence callback.
     def remove_occurrence(self, occurrence):
         eprint(f'untrack {occurrence}')
         self.tracked.remove(occurrence)
@@ -509,9 +610,9 @@ class Project(ce.Project):
             return ce.InclusionStatus.INCLUDED
         return ce.InclusionStatus.EXCLUDED
 
-    # Callback when the analysis progress of the project changes.  Progress is
-    # current/total*100%. When current is equal to total, the total will be
-    # reset before the next call.
+    # Callback when the analysis progress of the project changes.
+    # Progress is current/total*100%. When current is equal to total, the total
+    # will be reset before the next call.
     #
     # Parameters:
     #  - "current": the number of files analyzed
@@ -584,8 +685,8 @@ class Project(ce.Project):
             if verbose:
                 eprint(" `-> no entity found")
         else:
-           if verbose:
-               eprint(f' `-> found {ref}')
+            if verbose:
+                eprint(f' `-> found {ref}')
         return ref
 
     def wait_for_analysis(self):
@@ -616,6 +717,7 @@ class Project(ce.Project):
         )
         return ce._standard_path(path, project_path)
 
+
 class Diagnostic:
     def __init__(self, message, severity, path, offset):
         self.message = message
@@ -632,6 +734,7 @@ class Diagnostic:
             f'{ce.severity_name(self.severity)}: {self.message}'
             f' at {self.path}:{self.offset}'
         )
+
 
 class Occurrence:
     def __init__(self, data, scope):
