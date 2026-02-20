@@ -35,6 +35,18 @@ LD = $(CXX)
 
 OS = $(patsubst MINGW%,windows,$(patsubst Linux,linux,$(shell uname)))
 
+# Architecture suffix for the sys output folder
+# (Override if needed: make ARCH=x86_64)
+ARCH ?= $(shell uname -m)
+# Normalize a few common variants just in case
+ARCH := $(patsubst amd64,x86_64,$(patsubst x64,x86_64,$(ARCH)))
+
+# Build output sys folder (in the build directory)
+# Examples:
+#   sys-windows-x86_64
+#   sys-linux-x86_64
+SA_SYS = sys-$(OS)-$(ARCH)
+
 ################################################################################
 # Project configuration
 ################################################################################
@@ -98,7 +110,7 @@ endif
 else
 
 # Extension for executables
-EXE = 
+EXE =
 
 # Extension for shared libraries
 SLIB = .so
@@ -205,7 +217,7 @@ LLVM_LLD = $(LLVM_BIN)/lld$(EXE)
 # targets, amongst others: clang (the clang executable), libclang (the clang
 # library with stable API), lib*.a (with * taken from $(CLANG_LIB_NAMES)). In this
 # makefile, we define targets for clang and clang-ibs for lib*.a.
-# 
+#
 # We cannot put a dependency on the result of ninja, because that would cause
 # the target to be always rebuilt: `make` checks timestamps before any rules
 # execute, and assumes without checking that the timestamp is updated after
@@ -254,11 +266,11 @@ $(LLVM_BLD)/build.ninja:
 	  -DCMAKE_C_FLAGS='$(LLVM_FORCE_CFLAGS)')
 
 .PHONY: clang-clean clang-libs-clean llvm-clean lld-clean
-clang-clean: 
+clang-clean:
 	rm -rf $(LLVM_CLANG)
-lld-clean: 
+lld-clean:
 	rm -rf $(LLVM_LLD)
-clang-libs-clean: 
+clang-libs-clean:
 	rm -rf $(LLVM_BLD)
 llvm-clean: clang-clean lld-clean clang-libs-clean
 
@@ -360,12 +372,12 @@ $(CLANG_INCLUDER_TARGETS): \
 #-------------------------------------------------------------------------------
 
 # The Embeetle folder where compiled code (Clang, SA, ...) is installed
-SA_SYSLIB = sys/$(OS)/lib
+SA_SYSLIB = $(SA_SYS)/$(OS)/lib
 
 # Files installed into SA_SYS in addition to $(SOURCE)/sys
 SA_CLANG = $(SA_SYSLIB)/clang$(EXE)
 SA_LLD = $(SA_SYSLIB)/lld$(EXE)
-SA_WRAPPER = sys/esa/source_analyzer.py
+SA_WRAPPER = $(SA_SYS)/esa/source_analyzer.py
 SA_SO = $(SA_SYSLIB)/libsource_analyzer.so
 
 # Commands to finalize the sys tree.
@@ -382,8 +394,8 @@ cp $$(which diff) $@/$(OS)/bin
 cp $$(which diff3) $@/$(OS)/bin
 cp $$(which rsync) $@/$(OS)/bin
 cp $$(which ssh) $@/$(OS)/bin
-ldd sys/windows/*/* \
-| sed -e 's@.* => \([^ ]*\).*@cp \1 sys/windows/lib@' -e t -e d \
+ldd $@/$(OS)/*/* \
+| sed -e 's@.* => \([^ ]*\).*@cp \1 $@/$(OS)/lib@' -e t -e d \
 | sort -u \
 | grep -v ' /c/' \
 | sh
@@ -395,8 +407,11 @@ endef
 define finalize-sys-linux =
 endef
 
-# Create the sys folder as a copy of $(SOURCE)/sys with additional files
-sys: $(SOURCE)/sys \
+.PHONY: sys
+sys: $(SA_SYS)
+
+# Create the sys folder (with OS/arch suffix) as a copy of $(SOURCE)/sys with additional files
+$(SA_SYS): $(SOURCE)/sys \
   $(wildcard \
     $(SOURCE)/sys/esa   $(SOURCE)/sys/esa/*   $(SOURCE)/sys/esa/*/* \
     $(SOURCE)/sys/$(OS) $(SOURCE)/sys/$(OS)/* $(SOURCE)/sys/$(OS)/*/* \
@@ -413,14 +428,14 @@ sys: $(SOURCE)/sys \
 
 # Add a version file after checking that all source files are checked in
 .PHONY: version-stamp
-version-stamp: sys
+version-stamp: $(SA_SYS)
 	# Are all source files checked in to git?
 	cd $(SOURCE) && git status --short
 	cd $(SOURCE) && test "$$(git status --short)" = ""
 	cd $(LLVM_SRC) && git status --short
 	cd $(LLVM_SRC) && test "$$(git status --short)" = ""
-	( cd $(SOURCE) && git log --pretty='format:SA %H %ai%n' -n 1 ) > $</version.txt
-	( cd $(LLVM_SRC) && git log --pretty='format:LLVM %H %ai%n' -n 1 ) >> $</version.txt
+	( cd $(SOURCE) && git log --pretty='format:SA %H %ai%n' -n 1 ) >  $(SA_SYS)/version.txt
+	( cd $(LLVM_SRC) && git log --pretty='format:LLVM %H %ai%n' -n 1 ) >> $(SA_SYS)/version.txt
 
 release: version-stamp selftest test install
 
@@ -462,8 +477,8 @@ install: sys
 # The sys folder in the Embeetle development tree should not contain version.txt
 # because version.txt requires all source files to be checked in, which is
 # annoying during development.
-$(EMBEETLE_SYS)/timestamp: sys 
-	rsync -a --delete -v sys/ $(EMBEETLE_SYS)
+$(EMBEETLE_SYS)/timestamp: sys
+	rsync -a --delete -v $(SA_SYS)/ $(EMBEETLE_SYS)
 	touch $@
 
 #-------------------------------------------------------------------------------
@@ -478,14 +493,14 @@ SA_UPLOAD_LOC = /srv/new.embeetle/downloads/sa/$(OS)
 
 sys.7z: $(SA_INSTALLED_FILES) version-stamp
 	rm -f $@
-	$(SEVENZIP) a $@ sys
+	$(SEVENZIP) a $@ $(SA_SYS)
 
 .PHONY: upload
 upload: sys.7z sys selftest test
 	scp $< $(SA_UPLOAD_SERVER):$(SA_UPLOAD_LOC)
 	ssh $(SA_UPLOAD_SERVER) \
-      "cd $(SA_UPLOAD_LOC) && rm -rf sys && umask 22 && 7za x sys.7z"
-	cat sys/version.txt
+      "cd $(SA_UPLOAD_LOC) && rm -rf $(SA_SYS) && umask 22 && 7za x sys.7z"
+	cat $(SA_SYS)/version.txt
 
 #-------------------------------------------------------------------------------
 # Testing
@@ -535,7 +550,7 @@ PYTHON_ENV = \
   TOOLCHAIN_DIR=$(TOOLCHAIN_DIR) \
 
 # Extra dependencies of some test programs
-linktest: linktest.o libsource_analyzer.so 
+linktest: linktest.o libsource_analyzer.so
 base/Chain_test: base/debug.o base/time_util.o base/os.o
 myclang: myclang.o
 base/Chain_test: LDFLAGS += -lpthread
@@ -571,7 +586,7 @@ myclang.run: RUNFLAGS = \
 
 SUBDIRS = $(patsubst %/, %, $(sort $(filter-out ./, test $(dir $(SA_OBJECTS)))))
 
-test/stddef.test: $(SOURCE)/test/stddef.c 
+test/stddef.test: $(SOURCE)/test/stddef.c
 test/error.test: $(SOURCE)/test/error.c
 test/cpp.test: $(wildcard $(SOURCE)/test/cpp/source/*)
 
@@ -634,7 +649,7 @@ test/fa.test: \
   $(SOURCE)/test/fa/source/example.cpp \
   $(SOURCE)/test/fa/source/foo.cc \
 
-SKIP = 
+SKIP =
 TESTS = $(filter-out $(SKIP),$(patsubst $(SOURCE)/%.py,%.test,$(wildcard $(SOURCE)/test/*.py)))
 SELFTESTS = \
   base/filesystem.selftest.test \
@@ -692,7 +707,7 @@ compiler.selftest.run compiler.selftest.test: \
 OTree.selftest: $(filter-out OTree.o,$(SA_OBJECTS)) $(CLANG_LIBS)
 OTree.selftest: LDFLAGS += $(CLANG_LDLIBS)
 
-TEST_PYTHON_DEPS = 
+TEST_PYTHON_DEPS =
 $(TESTS) $(RUNS): $(SOURCE)/template.py sys
 
 CXXFLAGS += -std=c++17
