@@ -40,7 +40,7 @@ OS = $(patsubst MINGW%,windows,$(patsubst Linux,linux,$(shell uname)))
 ################################################################################
 
 .PHONY: default
-default: selftest test install
+default: selftest test
 
 # Define SOURCE and vpaths for shadow building
 # Do NOT define VPATH,  or a vpath that matches 'sys'!
@@ -464,7 +464,6 @@ install: sys
 # annoying during development.
 $(EMBEETLE_SYS)/timestamp: sys 
 	rsync -a --delete -v sys/ $(EMBEETLE_SYS)
-	rsync -a -v $(EMBEETLE_SYS)/../sys_extra/ $(EMBEETLE_SYS)
 	touch $@
 
 #-------------------------------------------------------------------------------
