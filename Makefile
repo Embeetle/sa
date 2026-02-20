@@ -371,8 +371,8 @@ $(CLANG_INCLUDER_TARGETS): \
 # Installed sys folder for use in Embeetle
 #-------------------------------------------------------------------------------
 
-# The Embeetle folder where compiled code (Clang, SA, ...) is installed
-SA_SYSLIB = $(SA_SYS)/$(OS)/lib
+# The sys lib folder where compiled code (Clang, SA, ...) is installed
+SA_SYSLIB = $(SA_SYS)/lib
 
 # Files installed into SA_SYS in addition to $(SOURCE)/sys
 SA_CLANG = $(SA_SYSLIB)/clang$(EXE)
@@ -390,12 +390,13 @@ finalize-sys = $(finalize-sys-$(OS))
 # '/usr/lib/p7zip/7za', so we cannot copy `which 7za`
 #
 define finalize-sys-windows =
-cp $$(which diff) $@/$(OS)/bin
-cp $$(which diff3) $@/$(OS)/bin
-cp $$(which rsync) $@/$(OS)/bin
-cp $$(which ssh) $@/$(OS)/bin
-ldd $@/$(OS)/*/* \
-| sed -e 's@.* => \([^ ]*\).*@cp \1 $@/$(OS)/lib@' -e t -e d \
+mkdir -p $@/bin $@/lib
+cp $$(which diff) $@/bin
+cp $$(which diff3) $@/bin
+cp $$(which rsync) $@/bin
+cp $$(which ssh) $@/bin
+ldd $@/bin/* $@/lib/* \
+| sed -e 's@.* => \([^ ]*\).*@cp \1 $@/lib@' -e t -e d \
 | sort -u \
 | grep -v ' /c/' \
 | sh
@@ -411,6 +412,7 @@ endef
 sys: $(SA_SYS)
 
 # Create the sys folder (with OS/arch suffix) as a copy of $(SOURCE)/sys with additional files
+# Flatten $(SOURCE)/sys/$(OS) into $(SA_SYS) (no $(OS) subfolder in output).
 $(SA_SYS): $(SOURCE)/sys \
   $(wildcard \
     $(SOURCE)/sys/esa   $(SOURCE)/sys/esa/*   $(SOURCE)/sys/esa/*/* \
@@ -419,7 +421,8 @@ $(SA_SYS): $(SOURCE)/sys \
   $(LLVM_CLANG) $(LLVM_LLD) $(SOURCE)/source_analyzer.py libsource_analyzer.so
 	rm -rf $@
 	mkdir $@
-	cp -a $</esa $</$(OS) $@
+	cp -a $</esa $@
+	cp -a $</$(OS)/. $@
 	cp $(LLVM_CLANG) $(SA_CLANG)
 	cp $(LLVM_LLD) $(SA_LLD)
 	cp $(SOURCE)/source_analyzer.py $(SA_WRAPPER)
@@ -759,7 +762,7 @@ $(PROGRAMS): %: %.o
 %.test: %.py toolchains
 	# Make $@ triggered by $?
 	#echo PATH=$$PATH
-	#ldd sys/windows/lib/libsource_analyzer.so
+	#ldd $(SA_SYS)/lib/libsource_analyzer.so
 	#echo SA_DEBUG=$$SA_DEBUG
 	#pwd
 	#echo "---8x-----"
