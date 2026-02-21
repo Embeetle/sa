@@ -56,9 +56,9 @@ SA_SYS = sys-$(OS)-$(ARCH)
 # Run selftest + test, then print a summary at the end.
 # Note: 'install' is NOT run by default anymore.
 default:
-	+@$(MAKE) --no-print-directory selftest
-	+@$(MAKE) --no-print-directory test
-	@$(MAKE) --no-print-directory build-summary
+	+@$(MAKE) --no-print-directory -f $(firstword $(MAKEFILE_LIST)) selftest
+	+@$(MAKE) --no-print-directory -f $(firstword $(MAKEFILE_LIST)) test
+	@$(MAKE) --no-print-directory -f $(firstword $(MAKEFILE_LIST)) build-summary
 
 # Define SOURCE and vpaths for shadow building
 # Do NOT define VPATH,  or a vpath that matches 'sys'!
