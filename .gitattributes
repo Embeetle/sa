@@ -1,0 +1,4 @@
+# --- Universal rule: every text file gets LF ---
+# text=auto tells Git "treat anything that looks like text as text".
+# eol=lf overrides the platform default and forces LF in the working tree.
+* text=auto eol=lf
