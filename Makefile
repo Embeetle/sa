@@ -92,9 +92,9 @@ SLIB = .dll
 # In CMD,  msys paths need this prefix.
 PATHPREFIX = C:/msys64
 
-# Python. On Windows, we call python from the cmd shell for realistic testing.
-# This definition needs to be $(call)'d because of the required closing quote.
-PYTHON = $(PYTHON_ENV) "C:\Program Files\Python312\python" $(PATHPREFIX)$(1)
+# Use the passed-in PYTHON_CMD, or fall back to a generic 'python'
+PYTHON_CMD ?= python
+PYTHON = $(PYTHON_ENV) $(PYTHON_CMD) $(PATHPREFIX)$(1)
 
 # Additional libraries needed when linking against Clang
 CLANG_LDLIBS = -lpthread -lz -lzstd -lVersion -lole32 -luuid
