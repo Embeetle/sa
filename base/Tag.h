@@ -1,52 +1,19 @@
-// Copyright 2018-2023 Johan Cockx
-// Taggable objects and tags
-// =========================
+// Copyright © 2018-2026 Johan Cockx
 //
-// Tag is a template class that can attach data of a user-defined type to a
-// taggable object,  where a taggable object is an instance of a class derived
-// from Taggable.
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
 //
-// With T a user-defined type supporting default construction and assignment,
-// one can write:
-//   class B: public Taggable { ... };
-//   B* b = new B ...;
-//   T t1 = ...;
-//   T t2 = ...;
-//   Tag<T> xtag;
-//   xtag[b] = t1;
-//   Tag<T> ytag;
-//   ytag[b] = t2;
-//   assert(xtag[b] == t1);
-//   assert(ytag[b] == t2);
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
 //
-// Each Tag<T> attaches zero or one values of a user-defined type T to a
-// taggable object.  Two or more tags can attach a value to the same taggable
-// object.  Access to the value attached to a given object is fast: the access
-// time is independent of the total number of objects,  and even independent
-// of the number of objects with a value attached.  It is linear with the number
-// of values attached to the object,  but that is expected to be small.
-//
-// It is allowed to access a tag value that has never been set.  A tag value
-// is automatically created when it is accessed for the first time. The value is
-// initialized for built-in types (zero),  pointer types (null pointer) and
-// class types (default constructor).  It is not initialized for enums!
-// Sorry,  but I believe enum initialization cannot be done generically.
-// Use some integer type instead if initialization is required.
-//
-// It is also possible to determine if a tag value has been accessed or not, and
-// to iterate over all objects with a tag value for a given tag.  This
-// functionality is useful even if the tag value is unused; to efficiently
-// support this case, a template specialization for void tag values is provided.
-// A Tag<void> is sometimes called a Mark, because it marks objects without
-// attaching any other data.  See class definitions below for further details of
-// functionality provided.
-//
-// Implementation detail:  every taggable object maintains a singly linked list
-// of tag values.  Deriving from Taggable increases the memory cost of a class
-// by the size of a pointer (the root of the linked list).  To access a tag
-// value,  the linked list is traversed to locate the tag value for a given tag.
-// The most recently added tag value is examined first.
-//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef __base_Tag_h
 #define __base_Tag_h
