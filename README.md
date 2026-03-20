@@ -64,7 +64,7 @@ This directory is installed into the `sys/` folder of an Embeetle installation.
 - **CMake** and **Ninja** (for the LLVM build)
 - **7-Zip** (`7za`)
 - **Python 3** (for running tests)
-- The **LLVM repo** cloned and built at `~/bld/llvm` (see below)
+- The **LLVM repo** cloned from https://github.com/Embeetle/llvm
 
 ### Windows
 - [MSYS2](https://www.msys2.org/) installed at `C:/msys64`
@@ -81,45 +81,7 @@ This directory is installed into the `sys/` folder of an Embeetle installation.
 
 ## Building
 
-SA uses **shadow building** — you must build in a directory separate from the source tree.
-
-### 1. Build LLVM
-
-LLVM must be built before SA. From the SA source tree:
-
-```sh
-mkdir -p ~/bld/llvm
-cd ~/bld/sa          # your chosen build directory
-make -f ~/sa/Makefile llvm
-```
-
-This runs CMake + Ninja to build `clang` and `lld` into `~/bld/llvm`.
-
-### 2. Build SA
-
-```sh
-cd ~/bld/sa
-make -f ~/sa/Makefile
-```
-
-The default target runs the self-tests and regression tests, then produces the `sys-<os>-<arch>/` output directory.
-
-Useful individual targets:
-
-| Target | Description |
-|---|---|
-| `make llvm` | Build Clang + LLD from the LLVM repo |
-| `make sys` | Build `libsource_analyzer` and assemble the sys tree |
-| `make selftest` | Run unit-level self-tests |
-| `make test` | Run Python-based regression tests |
-| `make install` | Sync the sys tree into `~/embeetle/sys` |
-| `make upload` | Package and upload a release to the Embeetle download server |
-| `make release` | `version-stamp` + `selftest` + `test` + `install` + `upload` |
-| `make clean` | Remove all build artifacts |
-
-### Automated build (Windows)
-
-The `automate_builds.py` script (located in the `automate_builds/` sibling repo) automates cloning, installing packages, and running the full build pipeline including SA:
+The `automate_builds.py` script (located in the `automate_builds/` sibling repo at https://github.com/Embeetle/automate_builds) automates cloning, installing packages, and running the full build pipeline including SA:
 
 ```
 > python automate_builds.py --build-sa
@@ -128,38 +90,7 @@ The `automate_builds.py` script (located in the `automate_builds/` sibling repo)
 
 See that script's `--help` output for the full option reference.
 
-### Linux release builds (Docker)
-
-On Linux, portable release builds are produced inside a Docker container based on `quay.io/pypa/manylinux_2_28_x86_64` to ensure compatibility with a wide range of Linux distributions:
-
-```sh
-cd ~/bld/sa
-make -f ~/sa/Makefile release
-```
-
-This automatically builds the Docker image (if needed), runs the build inside the container, and uploads the result.
-
-## Testing
-
-Tests run automatically as part of the default `make` target. To run them individually:
-
-```sh
-# Self-tests (unit-level, no toolchain required)
-make -f ~/sa/Makefile selftest
-
-# Regression tests (require ARM and MIPS toolchains, downloaded automatically)
-make -f ~/sa/Makefile test
-```
-
-Toolchains are downloaded from the Embeetle server into `../beetle_tools/` on first use.
-
-## Integration with Embeetle
-
-After a successful build, run `make install` to copy the sys tree into `~/embeetle/sys`. Embeetle will then use the newly built SA automatically when launched from source.
-
-For a production release, `make upload` packages the sys tree as `sys.7z` and uploads it to the Embeetle download server, from where Embeetle installations fetch it on first launch.
-
 ## License
 
-Copyright © 2018–2026 Johan Cockx, Matic Kukovec & Kristof Mulier.
+Copyright © 2018–2026 Johan Cockx.
 Licensed under the [GNU General Public License v3.0 or later](https://www.gnu.org/licenses/gpl-3.0.html).
